@@ -30,6 +30,18 @@ u <- uplift(ier, cer, F)
 plot(u, fig.title="Example", fig.cap="Example from rMeta")
 
 
+## Test with zero CER
+data <- read.table(textConnection('
+         name   ai n1i  ci  n2i days
+1      Zarate    6  15   0  15     1
+2    Murrough   30  47   0  25     1
+3      Zarate   13  18   0  18     1
+4     Lapidus    8  18   0  18     1
+5 Diazgranado   10  18   0  18     1
+'), header=TRUE)
+
+# cer <- w.approx.cer(data$ci, data$n2i)
+
 ## Draw documentation graphics
 ## u <- uplift(ier, cer, F)
 ## pdf("man/figures/green.pdf", 8, 10)

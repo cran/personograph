@@ -1,7 +1,7 @@
 #' Generate personograph plots from data
 #'
 #' A personograph (Kuiper-Marshall plot) is a pictographic
-#' representation of relative harm and benefit from an intervention. It is
+#' representation of (relative) harm and benefit from an intervention. It is
 #' similar to
 #' \href{http://www.nntonline.net/visualrx/examples/}{Visual Rx (Cates
 #' Plots)}. Each icon on the grid is colored to indicate whether that
@@ -47,6 +47,7 @@
 #' @import grid
 #' @import grImport
 #' @import grDevices
+#' @importFrom utils tail
 #' @examples
 #' # Example data
 #' data <- read.table(textConnection('
@@ -64,15 +65,14 @@
 #' sm <- "RR" # The outcome measure (either Relative Risk or Odds Ratio)
 #' if (requireNamespace("meta", quietly = TRUE)) { # use meta if available
 #'     ## Calculate the pooled OR or RR point estimate
-#'     m <- with(data,
-#'            meta::metabin(ev.trt, n.trt, ev.ctrl, n.ctrl, sm=sm))
+#'     m <- with(data, meta::metabin(ev.trt, n.trt, ev.ctrl, n.ctrl, sm=sm))
 #'     point <- exp(m$TE.random) # meta returns random effects estimate on the log scale
 #' } else {
 #'     # Calculated Random Effects RR, using the meta package
 #'     point <- 0.5710092
 #' }
 #'
-#' # Approximate the Control Event Rates using a weighed median
+#' # Approximate the Control Event Rates using a weighted median
 #' cer <- w.approx.cer(data[["ev.ctrl"]], data[["n.ctrl"]])
 #'
 #' # Calculate the Intervention Event Rates (IER) from the CER and point estimate
@@ -81,7 +81,7 @@
 #' # Calcaulte the "uplift" statistics
 #' # Note that this depends on the direction of the outcome effect (higher_is_better)
 #' u <- uplift(ier, cer, higher_is_better=FALSE)
-#' plot(u, fig.title="Example", fig.cap="Example from rMeta")
+#' plot(u, fig.title="Example", fig.cap="Example")
 NULL
 
 w.median <- function(x, w) {
@@ -104,16 +104,32 @@ w.median <- function(x, w) {
 
 #' Calculate the CER (Control Event Rates)
 #'
-#' Calculates the CER from the data, this is a weighted approximation of absolute
-#' risk with control (from 0 to 1)
+#' Calculates the CER from the data, this is a approximation of absolute
+#' risk in the control population (from 0 to 1).
+#'
+#' By default it uses a weighted median of the indivdual control event rates. The weighted median has the benefit of always returning
+#' an event rate that actually did occur. However, it is possible that this might return a CER of 0.
+#' In this case we fall back to a weighted mean, and throw a warning.
+#' If this too returns a CER of 0, it probably means that there was not enough data to estimate the control risk accurately.
+#' In this case we recommend you obtain an estimate of the risk in the control group, for example from an observational study or expert opinion.
 #'
 #' @export
 #' @param ev.ctrl Vector of event rates in the control group (/arm)
-#' @param n.ctrl A vector of sample sizes in the control group (/arm)
+#' @param n.ctrl Vector of sample sizes in the control group (/arm)
 #' @return Approximated Control Event Rates (CER)
 w.approx.cer <- function(ev.ctrl, n.ctrl) {
+
     study_cer <- ev.ctrl / n.ctrl
-    w.median(study_cer, n.ctrl)
+    result <- w.median(study_cer, n.ctrl)
+    if(result == 0) { # Weighted median was zero
+        result <- sum(ev.ctrl) / sum(n.ctrl)
+        warning("The estimated control arm risk from the studies using the weighted median was 0, using the weighted mean instead.", call.=F)
+    }
+
+    if(result == 0) { # Still zero!
+        warning("The control arm risk was estimated as 0 from the studies. This probably indicates that the true control risk is a very small value greater than zero, but the studies were not able to estimate it accurately. Please note this may lead to unexpected results in the personograph chart. We recommend you obtain an estimate of the risk in the control group, for example from an observational study or expert opinion.", call.=F)
+    }
+    result
 }
 
 #' Calculate the IER (Intervention Event Rates)
@@ -130,13 +146,13 @@ calc.ier <- function(cer, point, sm) {
     } else if(sm == "OR") {
         return(cer * (point / (1 - (cer * (1 - point)))))
     } else {
-        stop("Sm need to be OR (Odds Ratios) or RR (Relative Risk)")
+        stop("sm need to be OR (Odds Ratios) or RR (Relative Risk)")
     }
 }
 
 #' "Uplift" from IER and CER
 #'
-#' Calculates the percentage (from 0 to 1) of people intervention benefit, intervention harm, bad, and good
+#' Calculates the percentage (from 0 to 1) of people who have an intervention benefit, intervention harm, bad outcome regardless, and good outcome regardless
 #' from the Intervention Event Rates (IER) and Control Event Rates (CER).
 #' Note that the result depends on the direction of the outcome measure,
 #' e.g. \code{higher_is_better = T} (default) for intervention efficacy, \code{higher_is_better = F} for
@@ -174,23 +190,22 @@ uplift <- function(ier, cer, higher_is_better=NULL) {
         cer <- 1 - cer
     }
 
-    ## [good outcome] people who are good no matter what intervention
+    ## [good outcome] people who have a good outcome no matter what intervention
     good <- min(ier, cer)
 
-    ## [bad outcome] people who are bad no matter what intervention
-    bad <- 1-max(ier, cer)
+    ## [bad outcome] people who have bad outcome no matter what intervention
+    bad <- 1 - max(ier, cer)
 
     ## [intervention benefit] people who would be benefit from the intervention
-    benefit <- max(ier-cer, 0)
+    benefit <- max(ier - cer, 0)
 
     ## [intervention harm] people who would harmed by intervention
-    harm <- max(cer-ier, 0)
+    harm <- max(cer - ier, 0)
 
-    if(higher_is_better) {
-        result <- list("good outcome"=good, "intervention harm"=harm, "bad outcome"=bad)
-    } else {
-        result <- list("good outcome"=good, "intervention benefit"=benefit, "bad outcome"=bad)
-    }
+    result <- list("good outcome"=good,
+                  "bad outcome"=bad,
+                  "intervention harm"=harm,
+                  "intervention benefit"=benefit)
 
     class(result) <- "personograph.uplift"
     result
@@ -203,9 +218,9 @@ as.colors <- function(lst, palette=gray.colors) {
 }
 
 round.standard <- function(x) {
-    # rounds numbers conventionally
-    # so that round.standard(0.5)==1
-    return(floor(x+0.5))
+    ## rounds numbers conventionally
+    ## so that round.standard(0.5)==1
+    floor(x + sign(x) * 0.5)
 }
 
 round.with.warn <- function(x, f=round.standard, name=NULL) {
@@ -217,7 +232,7 @@ round.with.warn <- function(x, f=round.standard, name=NULL) {
 }
 
 naturalfreq <- function(ar, denominator=100) {
-    numerator <- ar * denominator
+    numerator <- ar
     if(numerator > 0 && numerator <0.5) {
         return(paste0("< 1/", denominator))
     } else {
@@ -258,6 +273,14 @@ setColor <- function(icon, color) {
 #' @param fig.cap Figure caption
 #' @param fig.title Figure title
 #' @param draw.legend Logical if TRUE (default) will draw the legend
+#' @param force.fill A character vector of 'ignore' (default), 'most', 'least', or one of the names from \code{data}.
+#'     Defines the behaviour for cases when the rounding doesn't add
+#'     up to \code{n.icons}. 'ignore' simply draws less icons, 'most' adds an
+#'     icon to the largest group, 'least' to the smallest.
+#'     If a name from \code{data} is supplied it will added to that element
+#' @param fudge Fudge factor for the icon size, substracted from the \code{icon.size}
+#' @param round.fn Function that is applied to round the percentages from \code{data} to \code{n.icons}. See also \code{force.fill}
+#' @param legend.show.zeros Logical if TRUE indicating whether to show zero (0) values in the legend.
 #' @return None.
 #' @examples
 #' data <- list(first=0.9, second=0.1)
@@ -267,7 +290,7 @@ setColor <- function(icon, color) {
 #' # With different icon.style
 #' personograph(data, icon.style=4) # numeric from 1-11
 #' # Plot a thousand in a 20x50 grid
-#' personograph(data, n.icons=1000, dimensions=c(20,50))
+#' personograph(data, n.icons=1000, dimensions=c(20,50), plot.width=0.75)
 personograph <- function(data,
                  fig.title=NULL,
                  fig.cap=NULL,
@@ -276,9 +299,15 @@ personograph <- function(data,
                  icon.dim=NULL,
                  icon.style=1,
                  n.icons=100,
-                 plot.width=0.6,
+                 plot.width=0.75,
                  dimensions=ceiling(sqrt(c(n.icons, n.icons))),
+                 fudge=0.0075,
+                 legend.show.zeros=TRUE,
+                 force.fill="ignore",
+                 round.fn=round.standard,
                  colors=as.colors(data)) {
+
+    stopifnot(sum(unlist(data)) == 1)
 
     devAskNewPage(FALSE)
     grid.newpage()
@@ -326,12 +355,38 @@ personograph <- function(data,
     }
 
     data.names <- names(data)
-    counts <- sapply(data.names, function(name) {
-        x <- data[[which(data.names == name)]]
-        round.with.warn(x * n.icons, name=name)}, simplify = FALSE, USE.NAMES = TRUE)
 
     if(is.null(colors)) {
         colors <- as.colors(data)
+    }
+
+    ## round based on *cumulative* sum
+    ## this means that icons will be aligned to the grid, and
+    ## will avoid problems with having more icons than the
+    ## grid allows due to rounding errors
+    n.elements <- length(data)
+    cum_data <- cumsum(c(data, 0))
+
+    rounded <- round(cum_data * n.icons)
+    rounded[2:n.elements] <- rounded[2:n.elements] - rounded[1:n.elements-1]
+    counts <- round.with.warn(rounded, f=round.fn, name=name)
+
+    if(sum(unlist(counts)) < n.icons) {
+        ordered.names <- data.names[order(unlist(counts))]
+        forceFill <- function(counts, name) {
+            counts[[name]] <- counts[[name]] + 1
+            warning(paste0("adding an extra icon to ", name, ", to fill to ", n.icons))
+            counts
+        }
+        if(force.fill == "least") {
+            counts <- forceFill(counts, utils::tail(ordered.names, n = 1))
+        } else if(force.fill == "most") {
+            counts <- forceFill(counts, ordered.names[[1]])
+        } else if(force.fill == "ignore") {
+            warning(paste0("rounded sum of icons does not add up to ", n.icons, ", drawing less icons"))
+        } else {
+            counts <- forceFill(counts, force.fill)
+        }
     }
 
     flat <- unlist(lapply(data.names, function(name) { rep(name, counts[[name]])}))
@@ -377,7 +432,6 @@ personograph <- function(data,
         coords <- coordinates(mask, icon.width, icon.height)
         if(length(coords$x) > 0 && length(coords$y) > 0) {
             icon <- setColor(icon, color)
-            fudge <- 0.0075
             grid.symbols(icon, x=coords$x, y=coords$y, size=max(icon.height, icon.width) - fudge)
         }
     }
@@ -387,13 +441,13 @@ personograph <- function(data,
 
     if(draw.legend) {
         seekViewport("legend")
+        filtered.data.names <- if(legend.show.zeros) {data.names } else {data.names[which(data != 0)]}
 
-        legendCols <- length(data.names)
-
+        legendCols <- length(filtered.data.names)
         legendGrobs <- list()
         legendWidths <- list()
-        for(name in data.names) {
-            label <- paste(naturalfreq(data[[name]], denominator=n.icons), name)
+        for(name in filtered.data.names) {
+            label <- paste(naturalfreq(counts[[name]], denominator=n.icons), name)
             grob <- textGrob(label, gp=font, just="left", x=-0)
             legendGrobs[[name]] <- grob
             legendWidths[[name]] <- widthDetails(grob)
@@ -411,10 +465,10 @@ personograph <- function(data,
 
 
         idx <- 0
-        for(name in data.names)  {
+        for(name in filtered.data.names)  {
             idx <- idx + 1
             pushViewport(viewport(layout.pos.row=1, layout.pos.col=idx))
-            grid.circle(x=0.4, r=0.35, gp=gpar(fill=colors[[name]], col=NA))
+            grid.circle(x=0.5, r=0.35, gp=gpar(fill=colors[[name]], col=NA))
             popViewport()
 
             idx <- idx + 1
@@ -441,5 +495,5 @@ personograph <- function(data,
 #' @seealso \code{\link{personograph}}
 plot.personograph.uplift <- function(x, ...) {
     colors <- list("intervention harm"="firebrick3", "intervention benefit"="olivedrab3", "bad outcome"="azure4", "good outcome"="azure2")
-    personograph(x, colors=colors, ...)
+    personograph(x, colors=colors, legend.show.zeros=F, ...)
 }
